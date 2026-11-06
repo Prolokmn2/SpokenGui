@@ -331,141 +331,197 @@ function SpokenGui:CreateWindow(opts)
 		btn.MouseButton1Click:Connect(function() selectTab(Tab) end)
 		if #Window._tabs == 1 then selectTab(Tab) end
 
-		local function row(height)
-			local f = create("Frame", {
-				Size = UDim2.new(1, 0, 0, height), BackgroundColor3 = Theme.Element, BorderSizePixel = 0,
-			}, page)
-			round(f, 6)
-			return f
+		-- attaches all element builders to `obj`, placing elements inside `container`
+		-- (used for both the tab itself and collapsible groups)
+		local function attach(obj, container)
+			local function row(height)
+				local f = create("Frame", {
+					Size = UDim2.new(1, 0, 0, height), BackgroundColor3 = Theme.Element, BorderSizePixel = 0,
+				}, container)
+				round(f, 6)
+				return f
+			end
+			local function rowLabel(parent, text)
+				return create("TextLabel", {
+					Size = UDim2.new(1, -20, 0, 20), Position = UDim2.fromOffset(10, 0),
+					BackgroundTransparency = 1, Text = text, Font = Enum.Font.GothamMedium,
+					TextSize = TEXT, TextColor3 = Theme.Text, TextXAlignment = Enum.TextXAlignment.Left,
+					TextTruncate = Enum.TextTruncate.AtEnd,
+				}, parent)
+			end
+
+			function obj:CreateSection(text)
+				create("TextLabel", {
+					Size = UDim2.new(1, 0, 0, 18), BackgroundTransparency = 1, Text = string.upper(text),
+					Font = Enum.Font.GothamBold, TextSize = 11, TextColor3 = Theme.Accent,
+					TextXAlignment = Enum.TextXAlignment.Left,
+				}, container)
+			end
+
+			function obj:CreateLabel(text)
+				local f = row(mobile and 32 or 28)
+				local l = rowLabel(f, text)
+				l.Position = UDim2.fromOffset(10, mobile and 6 or 4)
+				l.TextColor3 = Theme.SubText
+				return { Set = function(_, t) l.Text = t end }
+			end
+
+			function obj:CreateButton(o)
+				local f = row(ROW_H)
+				local b = create("TextButton", {
+					Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, Text = o.Name or "Button",
+					Font = Enum.Font.GothamMedium, TextSize = TEXT, TextColor3 = Theme.Text, AutoButtonColor = false,
+				}, f)
+				b.MouseEnter:Connect(function() tween(f, { BackgroundColor3 = Theme.ElementHover }) end)
+				b.MouseLeave:Connect(function() tween(f, { BackgroundColor3 = Theme.Element }) end)
+				b.MouseButton1Click:Connect(function()
+					tween(f, { BackgroundColor3 = Theme.Accent }, 0.08)
+					task.delay(0.12, function() tween(f, { BackgroundColor3 = Theme.Element }) end)
+					if o.Callback then task.spawn(o.Callback) end
+				end)
+			end
+
+			function obj:CreateToggle(o)
+				local state = o.Default or false
+				local f = row(ROW_H)
+				local l = rowLabel(f, o.Name or "Toggle")
+				l.Size = UDim2.new(1, -70, 1, 0)
+				local pill = create("Frame", {
+					Size = UDim2.fromOffset(38, 20), Position = UDim2.new(1, -48, 0.5, -10),
+					BackgroundColor3 = Theme.Background, BorderSizePixel = 0,
+				}, f)
+				round(pill, 10)
+				local knob = create("Frame", {
+					Size = UDim2.fromOffset(14, 14), Position = UDim2.fromOffset(3, 3),
+					BackgroundColor3 = Theme.SubText, BorderSizePixel = 0,
+				}, pill)
+				round(knob, 7)
+				local function render()
+					tween(pill, { BackgroundColor3 = state and Theme.Accent or Theme.Background })
+					tween(knob, {
+						Position = state and UDim2.fromOffset(21, 3) or UDim2.fromOffset(3, 3),
+						BackgroundColor3 = state and Theme.Text or Theme.SubText,
+					})
+				end
+				local function set(v, silent)
+					state = v and true or false
+					render()
+					if not silent and o.Callback then task.spawn(o.Callback, state) end
+				end
+				create("TextButton", {
+					Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, Text = "",
+				}, f).MouseButton1Click:Connect(function() set(not state) end)
+				render()
+				if state and o.Callback then task.spawn(o.Callback, state) end
+				return { Set = function(_, v) set(v) end, Get = function() return state end }
+			end
+
+			function obj:CreateSlider(o)
+				local min, max, inc = o.Min or 0, o.Max or 100, o.Increment or 1
+				local value = math.clamp(o.Default or min, min, max)
+				local f = row(SLIDER_H)
+				local l = rowLabel(f, "")
+				l.Position = UDim2.fromOffset(10, 6)
+				local barH = mobile and 8 or 6
+				local bar = create("Frame", {
+					Size = UDim2.new(1, -20, 0, barH), Position = UDim2.new(0, 10, 1, -(barH + 12)),
+					BackgroundColor3 = Theme.Background, BorderSizePixel = 0,
+				}, f)
+				round(bar, 4)
+				local fill = create("Frame", {
+					Size = UDim2.new(0, 0, 1, 0), BackgroundColor3 = Theme.Accent, BorderSizePixel = 0,
+				}, bar)
+				round(fill, 4)
+
+				local function render()
+					local shown = math.floor(value * 100 + 0.5) / 100
+					l.Text = string.format("%s: %s%s", o.Name or "Slider", tostring(shown), o.Suffix and (" " .. o.Suffix) or "")
+					fill.Size = UDim2.new((value - min) / math.max(max - min, 1e-9), 0, 1, 0)
+				end
+				local function set(v, silent)
+					v = math.clamp(math.floor(v / inc + 0.5) * inc, min, max)
+					if v == value and not silent then return end
+					value = v
+					render()
+					if not silent and o.Callback then task.spawn(o.Callback, value) end
+				end
+				local function fromX(x)
+					local rel = math.clamp((x - bar.AbsolutePosition.X) / bar.AbsoluteSize.X, 0, 1)
+					set(min + (max - min) * rel)
+				end
+
+				local sliding = false
+				f.InputBegan:Connect(function(i)
+					if isPress(i) then
+						sliding = true
+						page.ScrollingEnabled = false -- stop the page scrolling while dragging on touch
+						fromX(i.Position.X)
+						i.Changed:Connect(function()
+							if i.UserInputState == Enum.UserInputState.End then
+								sliding = false
+								page.ScrollingEnabled = true
+							end
+						end)
+					end
+				end)
+				table.insert(Window._conns, UIS.InputChanged:Connect(function(i)
+					if sliding and isMove(i) then fromX(i.Position.X) end
+				end))
+				render()
+				return { Set = function(_, v) set(v) end, Get = function() return value end }
+			end
 		end
-		local function rowLabel(parent, text)
-			return create("TextLabel", {
-				Size = UDim2.new(1, -20, 0, 20), Position = UDim2.fromOffset(10, 0),
-				BackgroundTransparency = 1, Text = text, Font = Enum.Font.GothamMedium,
+
+		attach(Tab, page)
+
+		-- Collapsible group: click the header to list / hide its settings
+		function Tab:CreateGroup(title, startOpen)
+			local Group = {}
+			local open = startOpen and true or false
+
+			local holder = create("Frame", {
+				Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
+				BackgroundTransparency = 1,
+			}, page)
+			create("UIListLayout", { Padding = UDim.new(0, 6) }, holder)
+
+			local header = create("Frame", {
+				Size = UDim2.new(1, 0, 0, ROW_H), BackgroundColor3 = Theme.Element, BorderSizePixel = 0,
+				LayoutOrder = 0,
+			}, holder)
+			round(header, 6)
+			create("UIStroke", { Color = Theme.Accent, Thickness = 1, Transparency = 0.6 }, header)
+			local titleLbl = create("TextLabel", {
+				Size = UDim2.new(1, -50, 1, 0), Position = UDim2.fromOffset(10, 0),
+				BackgroundTransparency = 1, Text = title, Font = Enum.Font.GothamBold,
 				TextSize = TEXT, TextColor3 = Theme.Text, TextXAlignment = Enum.TextXAlignment.Left,
 				TextTruncate = Enum.TextTruncate.AtEnd,
-			}, parent)
-		end
+			}, header)
+			local arrow = create("TextLabel", {
+				Size = UDim2.fromOffset(30, 20), Position = UDim2.new(1, -38, 0.5, -10),
+				BackgroundTransparency = 1, Text = open and "-" or "+", Font = Enum.Font.GothamBold,
+				TextSize = 18, TextColor3 = Theme.Accent,
+			}, header)
 
-		function Tab:CreateSection(text)
-			create("TextLabel", {
-				Size = UDim2.new(1, 0, 0, 18), BackgroundTransparency = 1, Text = string.upper(text),
-				Font = Enum.Font.GothamBold, TextSize = 11, TextColor3 = Theme.Accent,
-				TextXAlignment = Enum.TextXAlignment.Left,
-			}, page)
-		end
+			local content = create("Frame", {
+				Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
+				BackgroundTransparency = 1, Visible = open, LayoutOrder = 1,
+			}, holder)
+			create("UIListLayout", { Padding = UDim.new(0, 6) }, content)
+			create("UIPadding", { PaddingLeft = UDim.new(0, 8) }, content)
 
-		function Tab:CreateLabel(text)
-			local f = row(mobile and 32 or 28)
-			local l = rowLabel(f, text)
-			l.Position = UDim2.fromOffset(10, mobile and 6 or 4)
-			l.TextColor3 = Theme.SubText
-			return { Set = function(_, t) l.Text = t end }
-		end
-
-		function Tab:CreateButton(o)
-			local f = row(ROW_H)
-			local b = create("TextButton", {
-				Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, Text = o.Name or "Button",
-				Font = Enum.Font.GothamMedium, TextSize = TEXT, TextColor3 = Theme.Text, AutoButtonColor = false,
-			}, f)
-			b.MouseEnter:Connect(function() tween(f, { BackgroundColor3 = Theme.ElementHover }) end)
-			b.MouseLeave:Connect(function() tween(f, { BackgroundColor3 = Theme.Element }) end)
-			b.MouseButton1Click:Connect(function()
-				tween(f, { BackgroundColor3 = Theme.Accent }, 0.08)
-				task.delay(0.12, function() tween(f, { BackgroundColor3 = Theme.Element }) end)
-				if o.Callback then task.spawn(o.Callback) end
-			end)
-		end
-
-		function Tab:CreateToggle(o)
-			local state = o.Default or false
-			local f = row(ROW_H)
-			local l = rowLabel(f, o.Name or "Toggle")
-			l.Size = UDim2.new(1, -70, 1, 0)
-			local pill = create("Frame", {
-				Size = UDim2.fromOffset(38, 20), Position = UDim2.new(1, -48, 0.5, -10),
-				BackgroundColor3 = Theme.Background, BorderSizePixel = 0,
-			}, f)
-			round(pill, 10)
-			local knob = create("Frame", {
-				Size = UDim2.fromOffset(14, 14), Position = UDim2.fromOffset(3, 3),
-				BackgroundColor3 = Theme.SubText, BorderSizePixel = 0,
-			}, pill)
-			round(knob, 7)
-			local function render()
-				tween(pill, { BackgroundColor3 = state and Theme.Accent or Theme.Background })
-				tween(knob, {
-					Position = state and UDim2.fromOffset(21, 3) or UDim2.fromOffset(3, 3),
-					BackgroundColor3 = state and Theme.Text or Theme.SubText,
-				})
-			end
-			local function set(v, silent)
-				state = v and true or false
-				render()
-				if not silent and o.Callback then task.spawn(o.Callback, state) end
+			local function setOpen(v)
+				open = v
+				content.Visible = v
+				arrow.Text = v and "-" or "+"
 			end
 			create("TextButton", {
 				Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, Text = "",
-			}, f).MouseButton1Click:Connect(function() set(not state) end)
-			render()
-			if state and o.Callback then task.spawn(o.Callback, state) end
-			return { Set = function(_, v) set(v) end, Get = function() return state end }
-		end
+			}, header).MouseButton1Click:Connect(function() setOpen(not open) end)
 
-		function Tab:CreateSlider(o)
-			local min, max, inc = o.Min or 0, o.Max or 100, o.Increment or 1
-			local value = math.clamp(o.Default or min, min, max)
-			local f = row(SLIDER_H)
-			local l = rowLabel(f, "")
-			l.Position = UDim2.fromOffset(10, 6)
-			local barH = mobile and 8 or 6
-			local bar = create("Frame", {
-				Size = UDim2.new(1, -20, 0, barH), Position = UDim2.new(0, 10, 1, -(barH + 12)),
-				BackgroundColor3 = Theme.Background, BorderSizePixel = 0,
-			}, f)
-			round(bar, 4)
-			local fill = create("Frame", {
-				Size = UDim2.new(0, 0, 1, 0), BackgroundColor3 = Theme.Accent, BorderSizePixel = 0,
-			}, bar)
-			round(fill, 4)
-
-			local function render()
-				local shown = math.floor(value * 100 + 0.5) / 100
-				l.Text = string.format("%s: %s%s", o.Name or "Slider", tostring(shown), o.Suffix and (" " .. o.Suffix) or "")
-				fill.Size = UDim2.new((value - min) / math.max(max - min, 1e-9), 0, 1, 0)
-			end
-			local function set(v, silent)
-				v = math.clamp(math.floor(v / inc + 0.5) * inc, min, max)
-				if v == value and not silent then return end
-				value = v
-				render()
-				if not silent and o.Callback then task.spawn(o.Callback, value) end
-			end
-			local function fromX(x)
-				local rel = math.clamp((x - bar.AbsolutePosition.X) / bar.AbsoluteSize.X, 0, 1)
-				set(min + (max - min) * rel)
-			end
-
-			local sliding = false
-			f.InputBegan:Connect(function(i)
-				if isPress(i) then
-					sliding = true
-					page.ScrollingEnabled = false -- stop the page scrolling while dragging on touch
-					fromX(i.Position.X)
-					i.Changed:Connect(function()
-						if i.UserInputState == Enum.UserInputState.End then
-							sliding = false
-							page.ScrollingEnabled = true
-						end
-					end)
-				end
-			end)
-			table.insert(Window._conns, UIS.InputChanged:Connect(function(i)
-				if sliding and isMove(i) then fromX(i.Position.X) end
-			end))
-			render()
-			return { Set = function(_, v) set(v) end, Get = function() return value end }
+			function Group:SetOpen(v) setOpen(v) end
+			attach(Group, content)
+			return Group
 		end
 
 		return Tab
