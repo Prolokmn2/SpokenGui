@@ -416,6 +416,99 @@ function SpokenGui:CreateWindow(opts)
 				return { Set = function(_, v) set(v) end, Get = function() return state end }
 			end
 
+			function obj:CreateDropdown(o)
+				local options = o.Options or {}
+				local selected = o.Default
+				local holder = create("Frame", {
+					Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1,
+				}, container)
+				create("UIListLayout", { Padding = UDim.new(0, 4) }, holder)
+
+				local header = create("Frame", {
+					Size = UDim2.new(1, 0, 0, ROW_H), BackgroundColor3 = Theme.Element, BorderSizePixel = 0, LayoutOrder = 0,
+				}, holder)
+				round(header, 6)
+				local lbl = rowLabel(header, "")
+				lbl.Size = UDim2.new(1, -50, 1, 0)
+				local arrow = create("TextLabel", {
+					Size = UDim2.fromOffset(30, 20), Position = UDim2.new(1, -38, 0.5, -10),
+					BackgroundTransparency = 1, Text = "v", Font = Enum.Font.GothamBold,
+					TextSize = 14, TextColor3 = Theme.Accent,
+				}, header)
+
+				local listFrame = create("ScrollingFrame", {
+					Size = UDim2.new(1, 0, 0, 0), BackgroundColor3 = Theme.Sidebar, BorderSizePixel = 0,
+					ScrollBarThickness = 3, ScrollBarImageColor3 = Theme.Accent, Visible = false, LayoutOrder = 1,
+					CanvasSize = UDim2.new(), AutomaticCanvasSize = Enum.AutomaticSize.Y,
+				}, holder)
+				round(listFrame, 6)
+				create("UIListLayout", { Padding = UDim.new(0, 3) }, listFrame)
+				create("UIPadding", {
+					PaddingTop = UDim.new(0, 4), PaddingBottom = UDim.new(0, 4),
+					PaddingLeft = UDim.new(0, 4), PaddingRight = UDim.new(0, 6),
+				}, listFrame)
+
+				local open = false
+				local function renderLabel()
+					lbl.Text = (o.Name or "Select") .. ": " .. tostring(selected or "-")
+				end
+				local function paint()
+					for _, c in ipairs(listFrame:GetChildren()) do
+						if c:IsA("TextButton") then
+							c.BackgroundColor3 = (c.Text == tostring(selected)) and Theme.Accent or Theme.Element
+						end
+					end
+				end
+				local function setOpen(v)
+					open = v
+					listFrame.Visible = v
+					arrow.Text = v and "^" or "v"
+				end
+				local function select(v, silent)
+					selected = v
+					renderLabel()
+					paint()
+					setOpen(false)
+					if not silent and o.Callback then task.spawn(o.Callback, v) end
+				end
+				local function rebuild()
+					for _, c in ipairs(listFrame:GetChildren()) do
+						if c:IsA("TextButton") then c:Destroy() end
+					end
+					local itemH = ROW_H - 8
+					for _, opt in ipairs(options) do
+						local b = create("TextButton", {
+							Size = UDim2.new(1, 0, 0, itemH), BackgroundColor3 = Theme.Element, Text = tostring(opt),
+							Font = Enum.Font.GothamMedium, TextSize = TEXT, TextColor3 = Theme.Text,
+							AutoButtonColor = false, BorderSizePixel = 0,
+						}, listFrame)
+						round(b, 5)
+						b.MouseButton1Click:Connect(function() select(opt) end)
+					end
+					listFrame.Size = UDim2.new(1, 0, 0, math.min(#options * (itemH + 3) + 8, 160))
+					paint()
+				end
+
+				create("TextButton", {
+					Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, Text = "",
+				}, header).MouseButton1Click:Connect(function() setOpen(not open) end)
+
+				renderLabel()
+				rebuild()
+				return {
+					Set = function(_, v) select(v, true) end,
+					Get = function() return selected end,
+					Refresh = function(_, newOptions)
+						options = newOptions or {}
+						local found = false
+						for _, opt in ipairs(options) do if opt == selected then found = true end end
+						if not found then selected = options[1] end
+						renderLabel()
+						rebuild()
+					end,
+				}
+			end
+
 			function obj:CreateSlider(o)
 				local min, max, inc = o.Min or 0, o.Max or 100, o.Increment or 1
 				local value = math.clamp(o.Default or min, min, max)
