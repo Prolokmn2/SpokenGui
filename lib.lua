@@ -6,6 +6,7 @@ local Players = game:GetService("Players")
 local UIS = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
 local CoreGui = game:GetService("CoreGui")
+local HttpService = game:GetService("HttpService")
 
 SpokenGui.IsMobile = UIS.TouchEnabled and not UIS.KeyboardEnabled
 
@@ -95,7 +96,7 @@ end
 ------------------------------------------------------------------
 function SpokenGui:CreateWindow(opts)
 	opts = opts or {}
-	local Window = { _tabs = {}, _conns = {} }
+	local Window = { _tabs = {}, _conns = {}, Flags = {} }
 
 	local mobile = opts.Mobile
 	if mobile == nil then mobile = SpokenGui.IsMobile end
@@ -141,16 +142,23 @@ function SpokenGui:CreateWindow(opts)
 
 	local minimized = false
 
+	local MIN_W, MIN_H = mobile and 300 or 400, mobile and 200 or 260
+	local userSize -- set once the player drags the resize grip
+
 	local function computeSize()
 		local vp = viewport()
-		if mobile then
-			return Vector2.new(
-				math.min(vp.X - 16, math.clamp(vp.X * 0.85, 300, 480)),
-				math.min(vp.Y - 16, math.clamp(vp.Y * 0.78, 200, 320)))
+		local base
+		if userSize then
+			base = userSize
+		elseif mobile then
+			base = Vector2.new(math.clamp(vp.X * 0.85, 300, 480), math.clamp(vp.Y * 0.78, 200, 320))
+		else
+			base = Vector2.new(math.clamp(vp.X * 0.6, 420, 560), math.clamp(vp.Y * 0.6, 300, 380))
 		end
+		local maxW, maxH = vp.X - 16, vp.Y - 16
 		return Vector2.new(
-			math.min(vp.X - 16, math.clamp(vp.X * 0.6, 420, 560)),
-			math.min(vp.Y - 16, math.clamp(vp.Y * 0.6, 300, 380)))
+			math.clamp(base.X, math.min(MIN_W, maxW), maxW),
+			math.clamp(base.Y, math.min(MIN_H, maxH), maxH))
 	end
 
 	local function applySize(animated)
@@ -243,10 +251,46 @@ function SpokenGui:CreateWindow(opts)
 		BackgroundTransparency = 1,
 	}, main)
 
+	-- resize grip (bottom-right corner, mouse + touch)
+	local gs = mobile and 30 or 20
+	local grip = create("TextButton", {
+		Size = UDim2.fromOffset(gs, gs), AnchorPoint = Vector2.new(1, 1), Position = UDim2.new(1, 0, 1, 0),
+		BackgroundTransparency = 1, Text = "", AutoButtonColor = false, ZIndex = 20,
+	}, main)
+	for _, cfg in ipairs({ { 0.62, 0.8 }, { 0.82, 0.4 } }) do
+		create("Frame", {
+			Size = UDim2.fromOffset(gs * cfg[2], 2), AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.new(cfg[1], 0, cfg[1], 0), Rotation = -45,
+			BackgroundColor3 = Theme.Accent, BackgroundTransparency = 0.2, BorderSizePixel = 0, ZIndex = 21,
+		}, grip)
+	end
+	local resizing, rStart, rSize, rPos
+	grip.InputBegan:Connect(function(i)
+		if isPress(i) then
+			resizing, rStart, rSize, rPos = true, i.Position, main.AbsoluteSize, main.Position
+			i.Changed:Connect(function()
+				if i.UserInputState == Enum.UserInputState.End then resizing = false end
+			end)
+		end
+	end)
+	table.insert(Window._conns, UIS.InputChanged:Connect(function(i)
+		if resizing and isMove(i) then
+			local d = i.Position - rStart
+			local vp = viewport()
+			local w = math.clamp(rSize.X + d.X, math.min(MIN_W, vp.X - 16), vp.X - 16)
+			local h = math.clamp(rSize.Y + d.Y, math.min(MIN_H, vp.Y - 16), vp.Y - 16)
+			userSize = Vector2.new(w, h)
+			main.Size = UDim2.fromOffset(w, h)
+			-- window is centre-anchored: shift by half the change so the top-left corner stays put
+			main.Position = UDim2.new(rPos.X.Scale, rPos.X.Offset + (w - rSize.X) / 2, rPos.Y.Scale, rPos.Y.Offset + (h - rSize.Y) / 2)
+		end
+	end))
+
 	-- show/hide
 	local function setVisible(v) main.Visible = v end
 	minBtn.MouseButton1Click:Connect(function()
 		minimized = not minimized
+		grip.Visible = not minimized
 		sidebar.Visible = not minimized
 		pages.Visible = not minimized
 		applySize(true)
@@ -256,6 +300,78 @@ function SpokenGui:CreateWindow(opts)
 		gui:Destroy()
 	end
 	function Window:Toggle() setVisible(not main.Visible) end
+
+	------------------------------------------------------------------
+	-- Configs (save / load every control that has a Flag)
+	------------------------------------------------------------------
+	local function cfgBase() return opts.ConfigFolder or "SpokenGui" end
+	local function hasFiles() return (writefile and readfile and isfolder and makefolder) and true or false end
+	local function cleanName(n)
+		local c = tostring(n or ""):gsub("[^%w_%- ]", "")
+		return (c:match("^%s*(.-)%s*$"))
+	end
+	local function cfgPath(name) return cfgBase() .. "/configs/" .. name .. ".json" end
+
+	function Window:GetConfig()
+		local t = {}
+		for flag, ctl in pairs(self.Flags) do
+			local ok, v = pcall(ctl.Get)
+			if ok then t[flag] = v end
+		end
+		return t
+	end
+
+	function Window:SaveConfig(name)
+		if not hasFiles() then return false, "Your executor has no file functions" end
+		name = cleanName(name)
+		if name == "" then return false, "Enter a config name first" end
+		local ok, err = pcall(function()
+			local base = cfgBase()
+			if not isfolder(base) then makefolder(base) end
+			if not isfolder(base .. "/configs") then makefolder(base .. "/configs") end
+			writefile(cfgPath(name), HttpService:JSONEncode(self:GetConfig()))
+		end)
+		if not ok then return false, tostring(err) end
+		return true, name
+	end
+
+	function Window:LoadConfig(name)
+		if not hasFiles() then return false, "Your executor has no file functions" end
+		name = cleanName(name)
+		if name == "" then return false, "Pick or type a config name" end
+		if not (isfile and isfile(cfgPath(name))) then return false, "Config '" .. name .. "' not found" end
+		local ok, data = pcall(function() return HttpService:JSONDecode(readfile(cfgPath(name))) end)
+		if not ok or type(data) ~= "table" then return false, "Config file is corrupted" end
+		for flag, value in pairs(data) do
+			local ctl = self.Flags[flag]
+			if ctl then pcall(ctl.Set, ctl, value) end
+		end
+		return true, name
+	end
+
+	function Window:DeleteConfig(name)
+		name = cleanName(name)
+		if not (delfile and isfile and isfile(cfgPath(name))) then return false, "Config '" .. name .. "' not found" end
+		local ok, err = pcall(delfile, cfgPath(name))
+		if not ok then return false, tostring(err) end
+		return true, name
+	end
+
+	function Window:ListConfigs()
+		local names = {}
+		if not (listfiles and isfolder) then return names end
+		local dir = cfgBase() .. "/configs"
+		if not isfolder(dir) then return names end
+		local ok, files = pcall(listfiles, dir)
+		if ok then
+			for _, f in ipairs(files) do
+				local n = tostring(f):match("([^/\\]+)%.json$")
+				if n then table.insert(names, n) end
+			end
+		end
+		table.sort(names)
+		return names
+	end
 	closeBtn.MouseButton1Click:Connect(function() Window:Destroy() end)
 
 	if mobile then
@@ -413,7 +529,9 @@ function SpokenGui:CreateWindow(opts)
 				}, f).MouseButton1Click:Connect(function() set(not state) end)
 				render()
 				if state and o.Callback then task.spawn(o.Callback, state) end
-				return { Set = function(_, v) set(v) end, Get = function() return state end }
+				local ctl = { Set = function(_, v) set(v) end, Get = function() return state end }
+				if o.Flag then Window.Flags[o.Flag] = ctl end
+				return ctl
 			end
 
 			function obj:CreateDropdown(o)
@@ -495,8 +613,9 @@ function SpokenGui:CreateWindow(opts)
 
 				renderLabel()
 				rebuild()
-				return {
-					Set = function(_, v) select(v, true) end,
+				local ctl
+				ctl = {
+					Set = function(_, v) select(v) end,
 					Get = function() return selected end,
 					Refresh = function(_, newOptions)
 						options = newOptions or {}
@@ -506,6 +625,54 @@ function SpokenGui:CreateWindow(opts)
 						renderLabel()
 						rebuild()
 					end,
+				}
+				if o.Flag then Window.Flags[o.Flag] = ctl end
+				return ctl
+			end
+
+			function obj:CreateParagraph(o)
+				local f = create("Frame", {
+					Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
+					BackgroundColor3 = Theme.Element, BorderSizePixel = 0,
+				}, container)
+				round(f, 6)
+				create("UIPadding", {
+					PaddingTop = UDim.new(0, 8), PaddingBottom = UDim.new(0, 8),
+					PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 10),
+				}, f)
+				create("UIListLayout", { Padding = UDim.new(0, 4) }, f)
+				if o.Title then
+					create("TextLabel", {
+						Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1,
+						Text = o.Title, Font = Enum.Font.GothamBold, TextSize = TEXT, TextColor3 = Theme.Accent,
+						TextXAlignment = Enum.TextXAlignment.Left, TextWrapped = true, LayoutOrder = 0,
+					}, f)
+				end
+				create("TextLabel", {
+					Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1,
+					Text = o.Content or "", Font = Enum.Font.Gotham, TextSize = mobile and 11 or 12,
+					TextColor3 = Theme.Text, TextXAlignment = Enum.TextXAlignment.Left,
+					TextYAlignment = Enum.TextYAlignment.Top, TextWrapped = true, LayoutOrder = 1,
+				}, f)
+			end
+
+			function obj:CreateTextbox(o)
+				local f = row(ROW_H)
+				local l = rowLabel(f, o.Name or "Text")
+				l.Size = UDim2.new(0.4, -10, 1, 0)
+				local box = create("TextBox", {
+					Size = UDim2.new(0.6, -10, 1, -10), Position = UDim2.new(0.4, 0, 0, 5),
+					BackgroundColor3 = Theme.Background, BorderSizePixel = 0, Text = o.Default or "",
+					PlaceholderText = o.Placeholder or "", PlaceholderColor3 = Theme.SubText,
+					ClearTextOnFocus = false, Font = Enum.Font.Gotham, TextSize = TEXT, TextColor3 = Theme.Text,
+				}, f)
+				round(box, 5)
+				box.FocusLost:Connect(function()
+					if o.Callback then task.spawn(o.Callback, box.Text) end
+				end)
+				return {
+					Get = function() return box.Text end,
+					Set = function(_, v) box.Text = tostring(v or "") end,
 				}
 			end
 
@@ -561,7 +728,9 @@ function SpokenGui:CreateWindow(opts)
 					if sliding and isMove(i) then fromX(i.Position.X) end
 				end))
 				render()
-				return { Set = function(_, v) set(v) end, Get = function() return value end }
+				local ctl = { Set = function(_, v) set(v) end, Get = function() return value end }
+				if o.Flag then Window.Flags[o.Flag] = ctl end
+				return ctl
 			end
 		end
 
